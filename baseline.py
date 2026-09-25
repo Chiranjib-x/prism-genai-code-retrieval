@@ -32,7 +32,8 @@ def main() -> None:
     task_result = list(result.task_results)[0]
     OUT.mkdir(exist_ok=True)
     path = OUT / f"appsretrieval_{MODEL.replace('/', '__')}.json"
-    path.write_text(json.dumps(task_result.to_dict(), indent=2))
+    # default=str: current MTEB puts a datetime in to_dict(), which plain json.dumps rejects.
+    path.write_text(json.dumps(task_result.to_dict(), indent=2, default=str))
 
     scores = task_result.to_dict()["scores"]["test"][0]
     print(f"model      {MODEL}")

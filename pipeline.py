@@ -35,6 +35,7 @@ from sentence_transformers import SentenceTransformer
 from execute import parse_examples, passes
 
 CACHE = Path("cache/exec.json")      # (doc, examples) -> pass/fail; gitignored
+EMB_CACHE = Path("cache/emb")        # content-addressed embeddings; gitignored
 PASS_BOOST = 2.0                     # cosine sims live in [-1, 1]; +2 puts passers first
 
 # e5 models were trained with these prefixes; other models get none.
@@ -56,11 +57,33 @@ class ExecRerankSearch:
         self.cache: dict[str, bool] = json.loads(CACHE.read_text()) if CACHE.exists() else {}
         self.stats: dict[str, float] = {}
 
+    def _encode(self, texts: list[str]) -> np.ndarray:
+        """Normalised embeddings, cached on disk keyed by model + exact texts.
+
+        Encoding the 8.8k-doc corpus takes ~20 min on CPU; every experiment
+        after the first reuses it.
+        """
+        # ponytail: whole-list key. P1 (re-indexing a new code version) wants a
+        # per-document key so only changed snippets are re-encoded.
+        blob = "\0".join([self.model_name, *texts]).encode()
+        path = EMB_CACHE / f"{hashlib.sha1(blob).hexdigest()[:16]}.npy"
+        if path.exists():
+            return np.load(path)
+        emb = self.encoder.encode(texts, batch_size=32, normalize_embeddings=True,
+                                  show_progress_bar=True, convert_to_numpy=True)
+        EMB_CACHE.mkdir(parents=True, exist_ok=True)
+        np.save(path, emb)
+        return emb
+
     # -- MTEB SearchProtocol ------------------------------------------------
 
     @property
     def mteb_model_meta(self) -> ModelMeta:
         suffix = f"exec-k{self.k}" if self.rerank else "dense"
+        if self.max_queries:
+            # Sliced runs still score against every qrel, so the numbers are
+            # deflated. Never let one be mistaken for the submission file.
+            suffix += f"-smoke{self.max_queries}"
         return ModelMeta(
             loader=None, name=f"local/{self.model_name.split('/')[-1]}-{suffix}",
             revision="1", release_date="2026-09-26", languages=["eng-Latn", "python-Code"],
@@ -75,9 +98,7 @@ class ExecRerankSearch:
         t0 = time.time()
         self.doc_ids = list(corpus["id"])
         self.doc_text = dict(zip(self.doc_ids, corpus["text"]))
-        self.doc_emb = self.encoder.encode(
-            [self.d_prefix + t for t in corpus["text"]], batch_size=32,
-            normalize_embeddings=True, show_progress_bar=True, convert_to_numpy=True)
+        self.doc_emb = self._encode([self.d_prefix + t for t in corpus["text"]])
         self.stats["index_s"] = time.time() - t0
 
     def search(self, queries, *, task_metadata, hf_split, hf_subset, top_k, encode_kwargs,
@@ -86,9 +107,7 @@ class ExecRerankSearch:
         qids, qtexts = list(queries["id"]), list(queries["text"])
         if self.max_queries:
             qids, qtexts = qids[: self.max_queries], qtexts[: self.max_queries]
-        q_emb = self.encoder.encode(
-            [self.q_prefix + t for t in qtexts], batch_size=32,
-            normalize_embeddings=True, show_progress_bar=True, convert_to_numpy=True)
+        q_emb = self._encode([self.q_prefix + t for t in qtexts])
         sims = q_emb @ self.doc_emb.T
         n = max(top_k, self.k)
         top = np.argpartition(-sims, n, axis=1)[:, :n]
@@ -152,7 +171,8 @@ def main() -> None:
     task_result = list(result.task_results)[0]
     out = Path("results") / f"appsretrieval_{name}.json"
     out.parent.mkdir(exist_ok=True)
-    out.write_text(json.dumps(task_result.to_dict(), indent=2))
+    # default=str: current MTEB puts a datetime in to_dict(), which plain json.dumps rejects.
+    out.write_text(json.dumps(task_result.to_dict(), indent=2, default=str))
 
     s = task_result.to_dict()["scores"]["test"][0]
     print(f"\n{name}")
