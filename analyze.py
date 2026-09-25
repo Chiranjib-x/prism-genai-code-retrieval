@@ -1,0 +1,90 @@
+"""Offline rerank experiments from cached embeddings + execution results.
+
+Every AppsRetrieval test query has exactly one relevant document, so the
+metrics have closed forms: NDCG@10 = 1/log2(rank+2), MRR@10 = 1/(rank+1),
+both 0 beyond rank 10. That lets rerank variants be scored in seconds instead
+of re-running the MTEB pipeline. Checked against MTEB's own numbers below.
+
+Usage: python analyze.py
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+from datasets import load_dataset
+
+from execute import parse_examples
+
+EMB = Path("cache/emb")
+EXEC = Path("cache/exec.json")
+
+
+def load():
+    corpus = load_dataset("CoIR-Retrieval/apps", "corpus", split="corpus")
+    queries = {x["_id"]: x["text"] for x in load_dataset("CoIR-Retrieval/apps", "queries", split="queries")}
+    qrels = list(load_dataset("CoIR-Retrieval/apps", "default", split="test"))
+    doc_ids = list(corpus["_id"])
+    col = {d: j for j, d in enumerate(doc_ids)}
+    # ponytail: picks cached arrays by row count -- fine while one model is cached.
+    # Key by model name once the embedder sweep puts several in cache/emb.
+    embs = {a.shape[0]: a for a in (np.load(f) for f in EMB.glob("*.npy"))}
+    sims = embs[len(qrels)] @ embs[len(doc_ids)].T
+    gold = np.array([col[r["corpus-id"]] for r in qrels])
+    examples = [parse_examples(queries[r["query-id"]]) for r in qrels]
+    tags = [hashlib.sha1(repr(e).encode()).hexdigest()[:12] if e else None for e in examples]
+    cache = json.loads(EXEC.read_text()) if EXEC.exists() else {}
+    return sims, gold, doc_ids, tags, cache
+
+
+def score(ranks: np.ndarray) -> tuple[float, float]:
+    """Mean NDCG@10 and MRR@10 (x100) from 0-based gold ranks (inf = not retrieved)."""
+    hit = ranks < 10
+    ndcg = np.where(hit, 1 / np.log2(np.minimum(ranks, 9) + 2), 0)
+    mrr = np.where(hit, 1 / (np.minimum(ranks, 9) + 1), 0)
+    return 100 * ndcg.mean(), 100 * mrr.mean()
+
+
+def rerank_ranks(sims, gold, doc_ids, tags, cache, k: int, boost=lambda n_pass: 2.0,
+                 n: int = 100) -> tuple[np.ndarray, dict]:
+    """Gold ranks after boosting top-k candidates that pass execution.
+
+    `boost(n_pass)` sets the bonus given how many candidates passed -- a pass
+    shared by 30 programs is weaker evidence than a unique one.
+    """
+    depth = max(n, k)
+    top = np.argpartition(-sims, depth, axis=1)[:, :depth]
+    ranks = np.full(len(gold), np.inf)
+    stats = {"missing_exec": 0, "queries_with_passer": 0}
+    for i in range(len(gold)):
+        order = top[i][np.argsort(-sims[i, top[i]])]
+        s = sims[i, order].copy()
+        if tags[i]:
+            flags = []
+            for d in order[:k]:
+                hit = cache.get(f"{doc_ids[d]}|{tags[i]}")
+                stats["missing_exec"] += hit is None
+                flags.append(bool(hit))
+            n_pass = sum(flags)
+            if n_pass:
+                stats["queries_with_passer"] += 1
+                s[:k] += np.array(flags) * boost(n_pass)
+        order = order[np.argsort(-s, kind="stable")]
+        where = np.flatnonzero(order == gold[i])
+        if where.size:
+            ranks[i] = where[0]
+    return ranks, stats
+
+
+if __name__ == "__main__":
+    sims, gold, doc_ids, tags, cache = load()
+    dense = (sims > sims[np.arange(len(gold)), gold][:, None]).sum(1).astype(float)
+    print("dense only        ndcg@10 %6.2f  mrr@10 %6.2f   (MTEB: 11.52 / 9.88)" % score(dense))
+    for k in (50, 100, 200, 500):
+        ranks, st = rerank_ranks(sims, gold, doc_ids, tags, cache, k)
+        note = f"  [{st['missing_exec']:,} unchecked pairs]" if st["missing_exec"] else ""
+        print(f"exec rerank k={k:<4} ndcg@10 %6.2f  mrr@10 %6.2f   passers in {st['queries_with_passer']} queries{note}"
+              % score(ranks))
