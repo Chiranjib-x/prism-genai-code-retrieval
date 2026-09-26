@@ -35,6 +35,21 @@ _ENV = {"SYSTEMROOT": os.environ.get("SYSTEMROOT", ""), "PYTHONIOENCODING": "utf
 _WORKDIR = Path(tempfile.mkdtemp(prefix="apps_exec_"))
 
 
+RESULTS_LOG = Path("cache/exec.tsv")   # append-only "<doc>|<examples-hash>\t0|1"; gitignored
+
+
+def load_results() -> dict[str, bool]:
+    """Every check ever run. Append-only, so a killed run loses nothing but its
+    last unflushed lines -- rerunning resumes instead of starting over."""
+    out: dict[str, bool] = {}
+    if RESULTS_LOG.exists():
+        for line in RESULTS_LOG.open(encoding="utf-8"):
+            key, _, val = line.rstrip("\n").partition("\t")
+            if val in ("0", "1"):            # skip a line truncated mid-write
+                out[key] = val == "1"
+    return out
+
+
 def parse_examples(query: str) -> list[tuple[str, str]]:
     """Extract (stdin, expected stdout) pairs. [] if the query has none."""
     m = EXAMPLES_HEAD.search(query)

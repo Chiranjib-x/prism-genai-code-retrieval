@@ -11,16 +11,14 @@ Usage: python analyze.py
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 
 import numpy as np
 from datasets import load_dataset
 
-from execute import parse_examples
+from execute import load_results, parse_examples
 
 EMB = Path("cache/emb")
-EXEC = Path("cache/exec.json")
 
 
 def load():
@@ -36,7 +34,7 @@ def load():
     gold = np.array([col[r["corpus-id"]] for r in qrels])
     examples = [parse_examples(queries[r["query-id"]]) for r in qrels]
     tags = [hashlib.sha1(repr(e).encode()).hexdigest()[:12] if e else None for e in examples]
-    cache = json.loads(EXEC.read_text()) if EXEC.exists() else {}
+    cache = load_results()
     return sims, gold, doc_ids, tags, cache
 
 

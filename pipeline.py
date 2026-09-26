@@ -32,9 +32,8 @@ import numpy as np
 from mteb.models.model_meta import ModelMeta
 from sentence_transformers import SentenceTransformer
 
-from execute import parse_examples, passes
+from execute import RESULTS_LOG, load_results, parse_examples, passes
 
-CACHE = Path("cache/exec.json")      # (doc, examples) -> pass/fail; gitignored
 EMB_CACHE = Path("cache/emb")        # content-addressed embeddings; gitignored
 PASS_BOOST = 2.0                     # cosine sims live in [-1, 1]; +2 puts passers first
 
@@ -54,7 +53,7 @@ class ExecRerankSearch:
         self.max_queries = max_queries  # 0 = no limit
         self.encoder = SentenceTransformer(model_name, device="cpu")
         self.q_prefix, self.d_prefix = _prefixes(model_name)
-        self.cache: dict[str, bool] = json.loads(CACHE.read_text()) if CACHE.exists() else {}
+        self.cache: dict[str, bool] = load_results()
         self.stats: dict[str, float] = {}
 
     def _encode(self, texts: list[str]) -> np.ndarray:
@@ -137,13 +136,20 @@ class ExecRerankSearch:
             jobs += [(qid, d, f"{d}|{tag}", examples) for d in ranked]
 
         todo = [j for j in jobs if j[2] not in self.cache]
-        print(f"execution: {len(jobs)} candidate checks, {len(todo)} uncached")
-        with ThreadPoolExecutor(self.workers) as pool:
-            for (_, doc, key, examples), ok in zip(
-                    todo, pool.map(lambda j: passes(self.doc_text[j[1]], j[3]), todo)):
+        print(f"execution: {len(jobs)} candidate checks, {len(todo)} uncached", flush=True)
+        RESULTS_LOG.parent.mkdir(exist_ok=True)
+        t0 = time.time()
+        with RESULTS_LOG.open("a", encoding="utf-8") as log, \
+                ThreadPoolExecutor(self.workers) as pool:
+            results_iter = pool.map(lambda j: passes(self.doc_text[j[1]], j[3]), todo)
+            for n, ((_, _, key, _), ok) in enumerate(zip(todo, results_iter), 1):
                 self.cache[key] = ok
-        CACHE.parent.mkdir(exist_ok=True)
-        CACHE.write_text(json.dumps(self.cache))
+                log.write(f"{key}\t{int(ok)}\n")
+                if n % 5000 == 0:
+                    log.flush()
+                    rate = n / (time.time() - t0)
+                    print(f"  {n:,}/{len(todo):,} checked  {rate:.0f}/s  "
+                          f"eta {(len(todo) - n) / rate / 60:.0f} min", flush=True)
 
         boosted = set()
         for qid, doc, key, _ in jobs:
