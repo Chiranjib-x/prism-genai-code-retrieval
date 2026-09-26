@@ -45,13 +45,51 @@ def _prefixes(model_name: str) -> tuple[str, str]:
     return next((p for key, p in PREFIXES.items() if key in model_name.lower()), ("", ""))
 
 
+def _extended_attention_mask(self, attention_mask, input_shape, device=None, dtype=None):
+    """transformers 4.x ModuleUtilsMixin.get_extended_attention_mask (encoder case),
+    removed in 5.x but still called by CodeXEmbed's remote code."""
+    dtype = dtype or torch.get_default_dtype()
+    ext = attention_mask[:, None, :, :] if attention_mask.dim() == 3 else attention_mask[:, None, None, :]
+    return (1.0 - ext.to(dtype)) * torch.finfo(dtype).min
+
+
+def repair_nonpersistent_buffers(model: torch.nn.Module) -> None:
+    """Rebuild buffers that transformers 5.x leaves uninitialised on load.
+
+    CodeXEmbed uses Alibaba's GTE code ("new-impl"), which registers
+    position_ids and the rotary inv_freq/cos/sin caches with persistent=False.
+    Those are not in the checkpoint and transformers 5 no longer re-runs the
+    module __init__ that fills them, so they hold garbage. position_ids crashes
+    loudly; garbage cos/sin tables would silently produce wrong embeddings.
+    Recomputed here exactly as the modules' own __init__ does.
+    """
+    for m in model.modules():
+        if type(m).__name__ == "NewModel" and not hasattr(m, "get_extended_attention_mask"):
+            type(m).get_extended_attention_mask = _extended_attention_mask
+        pos = getattr(m, "position_ids", None)
+        if isinstance(pos, torch.Tensor) and pos.dim() == 1:
+            m.position_ids = torch.arange(pos.numel(), device=pos.device)
+        if "RotaryEmbedding" in type(m).__name__:
+            m.inv_freq = 1.0 / (m.base ** (torch.arange(0, m.dim, 2).float() / m.dim))
+            seq_len = m.max_position_embeddings * getattr(m, "scaling_factor", 1.0)
+            m._set_cos_sin_cache(seq_len, m.inv_freq.device, torch.get_default_dtype())
+
+
 class ExecRerankSearch:
     """Dense retrieval + execution-verified rerank, as an MTEB SearchProtocol."""
 
-    def __init__(self, model_name: str, k: int, rerank: bool, workers: int, max_queries: int = 0):
+    def __init__(self, model_name: str, k: int, rerank: bool, workers: int,
+                 max_queries: int = 0, max_len: int = 1024):
         self.model_name, self.k, self.rerank, self.workers = model_name, k, rerank, workers
         self.max_queries = max_queries  # 0 = no limit
-        self.encoder = SentenceTransformer(model_name, device="cpu")
+        # trust_remote_code: CodeXEmbed ships its model class in its HF repo.
+        # Only pass model ids you have vetted.
+        self.encoder = SentenceTransformer(model_name, device="cpu", trust_remote_code=True)
+        repair_nonpersistent_buffers(self.encoder)
+        # CPU attention is quadratic: an 8k-token context overflows 16 GB RAM and
+        # thrashes swap. 1024 keeps the full text of 98% of queries, 99% of docs.
+        self.encoder.max_seq_length = min(self.encoder.max_seq_length, max_len)
+        print(f"{model_name}: max_seq_length={self.encoder.max_seq_length}", flush=True)
         self.q_prefix, self.d_prefix = _prefixes(model_name)
         self.cache: dict[str, bool] = load_results()
         self.stats: dict[str, float] = {}
@@ -64,11 +102,12 @@ class ExecRerankSearch:
         """
         # ponytail: whole-list key. P1 (re-indexing a new code version) wants a
         # per-document key so only changed snippets are re-encoded.
-        blob = "\0".join([self.model_name, *texts]).encode()
+        # max_seq_length is part of the key: a different truncation is different vectors.
+        blob = "\0".join([self.model_name, str(self.encoder.max_seq_length), *texts]).encode()
         path = EMB_CACHE / f"{hashlib.sha1(blob).hexdigest()[:16]}.npy"
         if path.exists():
             return np.load(path)
-        emb = self.encoder.encode(texts, batch_size=32, normalize_embeddings=True,
+        emb = self.encoder.encode(texts, batch_size=16, normalize_embeddings=True,
                                   show_progress_bar=True, convert_to_numpy=True)
         EMB_CACHE.mkdir(parents=True, exist_ok=True)
         np.save(path, emb)
@@ -167,9 +206,11 @@ def main() -> None:
     ap.add_argument("--no-rerank", action="store_true")
     ap.add_argument("--workers", type=int, default=24)
     ap.add_argument("--max-queries", type=int, default=0, help="slice queries for smoke tests (0=all)")
+    ap.add_argument("--max-len", type=int, default=1024, help="token cap per text (CPU RAM)")
     args = ap.parse_args()
 
-    model = ExecRerankSearch(args.model, args.k, not args.no_rerank, args.workers, args.max_queries)
+    model = ExecRerankSearch(args.model, args.k, not args.no_rerank, args.workers,
+                             args.max_queries, args.max_len)
     name = model.mteb_model_meta.name.split("/")[-1]
     result = mteb.evaluate(model, [mteb.get_task("AppsRetrieval")], cache=None,
                            prediction_folder=Path("results/predictions") / name)
