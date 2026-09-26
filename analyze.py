@@ -11,31 +11,45 @@ Usage: python analyze.py
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 
 import numpy as np
 from datasets import load_dataset
 
 from execute import load_results, parse_examples
+from pipeline import _prefixes, emb_path
 
-EMB = Path("cache/emb")
+# name -> (hf model id, max_seq_length it was encoded with)
+MODELS = {
+    "e5-base": ("intfloat/e5-base-v2", 512),
+    "codexembed-400m": ("Salesforce/SFR-Embedding-Code-400M_R", 1024),
+}
 
 
-def load():
+def load_data():
     corpus = load_dataset("CoIR-Retrieval/apps", "corpus", split="corpus")
-    queries = {x["_id"]: x["text"] for x in load_dataset("CoIR-Retrieval/apps", "queries", split="queries")}
+    qtext = {x["_id"]: x["text"] for x in load_dataset("CoIR-Retrieval/apps", "queries", split="queries")}
     qrels = list(load_dataset("CoIR-Retrieval/apps", "default", split="test"))
-    doc_ids = list(corpus["_id"])
+    doc_ids, docs = list(corpus["_id"]), list(corpus["text"])
+    queries = [qtext[r["query-id"]] for r in qrels]          # MTEB's order (verified)
     col = {d: j for j, d in enumerate(doc_ids)}
-    # ponytail: picks cached arrays by row count -- fine while one model is cached.
-    # Key by model name once the embedder sweep puts several in cache/emb.
-    embs = {a.shape[0]: a for a in (np.load(f) for f in EMB.glob("*.npy"))}
-    sims = embs[len(qrels)] @ embs[len(doc_ids)].T
     gold = np.array([col[r["corpus-id"]] for r in qrels])
-    examples = [parse_examples(queries[r["query-id"]]) for r in qrels]
+    examples = [parse_examples(q) for q in queries]
     tags = [hashlib.sha1(repr(e).encode()).hexdigest()[:12] if e else None for e in examples]
-    cache = load_results()
-    return sims, gold, doc_ids, tags, cache
+    return docs, queries, gold, doc_ids, tags, load_results()
+
+
+def load_sims(model_name: str, max_len: int, docs, queries) -> np.ndarray | None:
+    """Query x doc cosine similarities from the pipeline's embedding cache, or None."""
+    qp, dp = _prefixes(model_name)
+    d_path = emb_path(model_name, max_len, [dp + t for t in docs])
+    q_path = emb_path(model_name, max_len, [qp + t for t in queries])
+    if not (d_path.exists() and q_path.exists()):
+        return None
+    return np.load(q_path) @ np.load(d_path).T
+
+
+def dense_ranks(sims: np.ndarray, gold: np.ndarray) -> np.ndarray:
+    return (sims > sims[np.arange(len(gold)), gold][:, None]).sum(1).astype(float)
 
 
 def score(ranks: np.ndarray) -> tuple[float, float]:
@@ -78,11 +92,15 @@ def rerank_ranks(sims, gold, doc_ids, tags, cache, k: int, boost=lambda n_pass: 
 
 
 if __name__ == "__main__":
-    sims, gold, doc_ids, tags, cache = load()
-    dense = (sims > sims[np.arange(len(gold)), gold][:, None]).sum(1).astype(float)
-    print("dense only        ndcg@10 %6.2f  mrr@10 %6.2f   (MTEB: 11.52 / 9.88)" % score(dense))
-    for k in (50, 100, 200, 500):
-        ranks, st = rerank_ranks(sims, gold, doc_ids, tags, cache, k)
-        note = f"  [{st['missing_exec']:,} unchecked pairs]" if st["missing_exec"] else ""
-        print(f"exec rerank k={k:<4} ndcg@10 %6.2f  mrr@10 %6.2f   passers in {st['queries_with_passer']} queries{note}"
-              % score(ranks))
+    docs, queries, gold, doc_ids, tags, cache = load_data()
+    for name, (model, max_len) in MODELS.items():
+        sims = load_sims(model, max_len, docs, queries)
+        if sims is None:
+            print(f"{name}: no cached embeddings yet")
+            continue
+        print(f"{name:16} dense            ndcg@10 %6.2f  mrr@10 %6.2f" % score(dense_ranks(sims, gold)))
+        for k in (50, 100, 200, 500):
+            ranks, st = rerank_ranks(sims, gold, doc_ids, tags, cache, k)
+            note = f"  [{st['missing_exec']:,} unchecked pairs]" if st["missing_exec"] else ""
+            print(f"{'':16} exec rerank k={k:<3} ndcg@10 %6.2f  mrr@10 %6.2f   passers in "
+                  f"{st['queries_with_passer']} queries{note}" % score(ranks))

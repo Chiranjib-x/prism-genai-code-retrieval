@@ -45,6 +45,12 @@ def _prefixes(model_name: str) -> tuple[str, str]:
     return next((p for key, p in PREFIXES.items() if key in model_name.lower()), ("", ""))
 
 
+def emb_path(model_name: str, max_len: int, texts: list[str]) -> Path:
+    """Cache file for these exact texts under this model and truncation."""
+    blob = "\0".join([model_name, str(max_len), *texts]).encode()
+    return EMB_CACHE / f"{hashlib.sha1(blob).hexdigest()[:16]}.npy"
+
+
 def _extended_attention_mask(self, attention_mask, input_shape, device=None, dtype=None):
     """transformers 4.x ModuleUtilsMixin.get_extended_attention_mask (encoder case),
     removed in 5.x but still called by CodeXEmbed's remote code."""
@@ -107,8 +113,7 @@ class ExecRerankSearch:
         # ponytail: whole-list key. P1 (re-indexing a new code version) wants a
         # per-document key so only changed snippets are re-encoded.
         # max_seq_length is part of the key: a different truncation is different vectors.
-        blob = "\0".join([self.model_name, str(self.encoder.max_seq_length), *texts]).encode()
-        path = EMB_CACHE / f"{hashlib.sha1(blob).hexdigest()[:16]}.npy"
+        path = emb_path(self.model_name, self.encoder.max_seq_length, texts)
         if path.exists():
             return np.load(path)
         emb = self.encoder.encode(texts, batch_size=16, normalize_embeddings=True,
