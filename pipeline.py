@@ -85,6 +85,10 @@ class ExecRerankSearch:
         # trust_remote_code: CodeXEmbed ships its model class in its HF repo.
         # Only pass model ids you have vetted.
         self.encoder = SentenceTransformer(model_name, device="cpu", trust_remote_code=True)
+        # transformers 5 loads the checkpoint's dtype; CodeXEmbed ships bfloat16,
+        # which consumer CPUs emulate slowly (82 vs 619 tokens/s measured). fp32
+        # is also what reproduces the model card's similarities exactly.
+        self.encoder.float()
         repair_nonpersistent_buffers(self.encoder)
         # CPU attention is quadratic: an 8k-token context overflows 16 GB RAM and
         # thrashes swap. 1024 keeps the full text of 98% of queries, 99% of docs.
