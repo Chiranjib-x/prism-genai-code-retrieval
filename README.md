@@ -113,5 +113,6 @@ versioned corpora.
 
 ## Licences
 
-The stage-1 model `Salesforce/SFR-Embedding-Code-400M_R` is **CC-BY-NC-4.0**
+Code in this repository: MIT (see [LICENSE](LICENSE)). The stage-1 model
+`Salesforce/SFR-Embedding-Code-400M_R` is **CC-BY-NC-4.0**
 (non-commercial).
