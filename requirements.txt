@@ -1,0 +1,9 @@
+# Python 3.11. CPU-only torch build keeps the install small and matches the
+# theme's CPU constraint:
+#   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.14.0
+mteb==2.21.8
+sentence-transformers==6.1.0
+transformers==5.17.0
+datasets==5.0.1
+numpy==1.26.4

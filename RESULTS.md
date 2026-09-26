@@ -9,8 +9,12 @@ come from `analyze.py`, which reproduces MTEB's scores exactly (verified below).
 |---|---|---:|---:|---|
 | — | BM25 (published, CoIR paper) | 0.95 | — | literature |
 | — | UniXcoder, code-specific (published) | 1.36 | — | literature |
-| — | E5-Mistral-7B (published) | 21.33 | — | literature |
-| — | Best reported on APPS (CoIR paper) | 26.52 | — | literature |
+| — | Contriever / BGE-base / GTE-base (published) | 5.14 / 4.05 / 3.24 | — | CoIR paper |
+| — | BGE-M3, 567M (published) | 7.37 | — | CoIR paper |
+| — | E5-Mistral-7B (published) | 21.33 | — | CoIR paper |
+| — | Voyage-Code-002, proprietary API (published) | 26.52 | — | CoIR paper |
+| — | CodeXEmbed-400M / 2B / 7B (published) | 48.57 / 74.99 / 85.22 | — | CodeXEmbed paper |
+| — | CodeSage-large-v2, 1.3B (published) | 50.45 | — | CodeXEmbed paper |
 | 1 | e5-base-v2, dense only | **11.52** | **9.88** | MTEB, matches published exactly |
 | 2 | + execution rerank, top-50 | **20.71** | **19.96** | MTEB |
 
@@ -38,7 +42,19 @@ Execution can only rescue a gold solution that stage 1 retrieved.
 - At top-50, 628 queries have at least one passing candidate.
 - Throughput ~263 candidate checks/s (24 workers, Windows process spawn).
 
+## Prior art we must cite
+
+- *ExecRetrieval: Measuring the Functional-Correctness Gap in Code-Embedding
+  Retrieval* (arXiv 2609.01865, Sep 2026) — dense retrieval followed by
+  execution-based rerank on APPS example I/O. Execution rerank is not our
+  invention; claims must rest on the combination, measurements and engineering.
+
 ## Negative / cautionary results
+
+- Boosting passers only when few candidates pass (≤T) does not help at K=50:
+  NDCG rises monotonically to "boost all passers" (T=1: 20.45 … T≥10: 20.71).
+- Rerank "hurts" 2,473 queries, but only by nudging already-out-of-top-10 gold
+  down a few places; exactly 1 query lost a top-10 gold. Net cost 0.01 NDCG.
 
 - The published 30.74 NDCG@10 for execution rerank came from a 150-query
   sample. At full scale with the same base model and K=50 we measure 20.71.

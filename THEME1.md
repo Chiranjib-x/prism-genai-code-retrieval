@@ -48,6 +48,15 @@ by 0.3 points. Here there is room to win by ten.
 
 ## 3. The two findings that decide our approach
 
+> **Correction (26 Sep).** Finding A below is wrong as stated. It generalised from
+> UniXcoder, an older code model never trained for English→code search. Modern
+> code-*retrieval* embedders score far higher on APPS: CodeXEmbed-400M **48.57**,
+> CodeXEmbed-2B **74.99**, CodeXEmbed-7B **85.22**, CodeSage-large-v2 **50.45**
+> (CodeXEmbed paper, Table 1). Among *general* base-size text models E5 does lead
+> (BGE-base 4.05, GTE-base 3.24, Contriever 5.14 — CoIR paper). And execution
+> rerank on APPS is prior art: *ExecRetrieval* (arXiv 2609.01865, Sep 2026). See
+> RESULTS.md for current numbers.
+
 ### Finding A — code-specific embedders are the wrong tool
 
 Counterintuitive and well documented: **UniXcoder (code-specific) scores 1.36; E5-base-v2 (a
