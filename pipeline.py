@@ -32,7 +32,7 @@ import numpy as np
 from mteb.models.model_meta import ModelMeta
 from sentence_transformers import SentenceTransformer
 
-from execute import RESULTS_LOG, load_results, parse_examples, passes
+from execute import RESULTS_LOG, load_results, parse_examples, passes, result_key
 
 EMB_CACHE = Path("cache/emb")        # content-addressed embeddings; gitignored
 PASS_BOOST = 2.0                     # cosine sims live in [-1, 1]; +2 puts passers first
@@ -62,9 +62,55 @@ def load_encoder(model_name: str, max_len: int) -> SentenceTransformer:
 
 
 def emb_path(model_name: str, max_len: int, texts: list[str]) -> Path:
-    """Cache file for these exact texts under this model and truncation."""
+    """Legacy whole-list cache file (pre-EmbeddingStore); kept only for migration."""
     blob = "\0".join([model_name, str(max_len), *texts]).encode()
     return EMB_CACHE / f"{hashlib.sha1(blob).hexdigest()[:16]}.npy"
+
+
+class EmbeddingStore:
+    """Content-addressed embeddings: one row per distinct text, per model+truncation.
+
+    This is what makes re-indexing a new code version cheap (goal P1): only
+    snippets whose text changed are encoded; unchanged ones are looked up.
+    """
+
+    def __init__(self, model_name: str, max_len: int):
+        tag = hashlib.sha1(f"{model_name}|{max_len}".encode()).hexdigest()[:12]
+        self.keys_path = EMB_CACHE / f"store_{tag}.keys.npy"
+        self.vecs_path = EMB_CACHE / f"store_{tag}.vecs.npy"
+        self.row: dict[str, int] = {}
+        self.vecs: np.ndarray | None = None
+        if self.keys_path.exists():
+            self.row = {k: i for i, k in enumerate(np.load(self.keys_path).tolist())}
+            self.vecs = np.load(self.vecs_path)
+
+    @staticmethod
+    def key(text: str) -> str:
+        return hashlib.sha1(text.encode()).hexdigest()
+
+    def missing(self, texts: list[str]) -> list[str]:
+        return [t for t in dict.fromkeys(texts) if self.key(t) not in self.row]
+
+    def add(self, texts: list[str], vecs: np.ndarray) -> None:
+        """Append rows for texts not already stored (first occurrence wins, so
+        duplicate snippets in a corpus cannot misalign rows)."""
+        take: dict[str, int] = {}
+        for i, t in enumerate(texts):
+            k = self.key(t)
+            if k not in self.row and k not in take:
+                take[k] = i
+        start = 0 if self.vecs is None else len(self.vecs)
+        for n, k in enumerate(take):
+            self.row[k] = start + n
+        new = vecs[list(take.values())]
+        self.vecs = new if self.vecs is None else np.vstack([self.vecs, new])
+        EMB_CACHE.mkdir(parents=True, exist_ok=True)
+        np.save(self.keys_path, np.array(list(self.row)))
+        np.save(self.vecs_path, self.vecs)
+
+    def get(self, texts: list[str]) -> np.ndarray:
+        """Rows for these texts, in order. KeyError if any was never encoded."""
+        return self.vecs[[self.row[self.key(t)] for t in texts]]
 
 
 def _extended_attention_mask(self, attention_mask, input_shape, device=None, dtype=None):
@@ -111,22 +157,14 @@ class ExecRerankSearch:
         self.stats: dict[str, float] = {}
 
     def _encode(self, texts: list[str]) -> np.ndarray:
-        """Normalised embeddings, cached on disk keyed by model + exact texts.
-
-        Encoding the 8.8k-doc corpus takes ~20 min on CPU; every experiment
-        after the first reuses it.
-        """
-        # ponytail: whole-list key. P1 (re-indexing a new code version) wants a
-        # per-document key so only changed snippets are re-encoded.
-        # max_seq_length is part of the key: a different truncation is different vectors.
-        path = emb_path(self.model_name, self.encoder.max_seq_length, texts)
-        if path.exists():
-            return np.load(path)
-        emb = self.encoder.encode(texts, batch_size=16, normalize_embeddings=True,
-                                  show_progress_bar=True, convert_to_numpy=True)
-        EMB_CACHE.mkdir(parents=True, exist_ok=True)
-        np.save(path, emb)
-        return emb
+        """Normalised embeddings; only texts never seen before are encoded."""
+        store = EmbeddingStore(self.model_name, self.encoder.max_seq_length)
+        new = store.missing(texts)
+        print(f"encode: {len(texts):,} texts, {len(new):,} not yet indexed", flush=True)
+        if new:
+            store.add(new, self.encoder.encode(new, batch_size=16, normalize_embeddings=True,
+                                               show_progress_bar=True, convert_to_numpy=True))
+        return store.get(texts)
 
     # -- MTEB SearchProtocol ------------------------------------------------
 
@@ -185,11 +223,11 @@ class ExecRerankSearch:
             examples = parse_examples(text)
             if not examples:
                 continue
-            tag = hashlib.sha1(repr(examples).encode()).hexdigest()[:12]
             ranked = sorted(results[qid], key=results[qid].get, reverse=True)[: self.k]
-            jobs += [(qid, d, f"{d}|{tag}", examples) for d in ranked]
+            jobs += [(qid, d, result_key(self.doc_text[d], examples), examples) for d in ranked]
 
-        todo = [j for j in jobs if j[2] not in self.cache]
+        # one run per distinct (program content, examples) -- duplicates share it
+        todo = list({j[2]: j for j in jobs if j[2] not in self.cache}.values())
         print(f"execution: {len(jobs)} candidate checks, {len(todo)} uncached", flush=True)
         RESULTS_LOG.parent.mkdir(exist_ok=True)
         t0 = time.time()

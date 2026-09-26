@@ -24,7 +24,7 @@ import numpy as np
 from datasets import load_dataset
 
 from execute import parse_examples, passes
-from pipeline import PASS_BOOST, _prefixes, emb_path, load_encoder
+from pipeline import PASS_BOOST, EmbeddingStore, _prefixes, load_encoder
 
 DEFAULT_MODEL = "Salesforce/SFR-Embedding-Code-400M_R"
 
@@ -58,11 +58,11 @@ def main() -> None:
     t = time.perf_counter()
     enc = load_encoder(args.model, args.max_len)
     q_prefix, d_prefix = _prefixes(args.model)
-    path = emb_path(args.model, enc.max_seq_length, [d_prefix + d for d in docs])
-    if not path.exists():
+    try:
+        index = EmbeddingStore(args.model, enc.max_seq_length).get([d_prefix + d for d in docs])
+    except (KeyError, TypeError):
         raise SystemExit(f"No corpus index for {args.model} at max_len {enc.max_seq_length}.\n"
                          f"Build it once with: python pipeline.py --model {args.model} --no-rerank")
-    index = np.load(path)
     t_load = time.perf_counter() - t
 
     t = time.perf_counter()

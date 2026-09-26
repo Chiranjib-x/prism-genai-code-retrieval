@@ -35,7 +35,22 @@ _ENV = {"SYSTEMROOT": os.environ.get("SYSTEMROOT", ""), "PYTHONIOENCODING": "utf
 _WORKDIR = Path(tempfile.mkdtemp(prefix="apps_exec_"))
 
 
-RESULTS_LOG = Path("cache/exec.tsv")   # append-only "<doc>|<examples-hash>\t0|1"; gitignored
+RESULTS_LOG = Path("cache/exec.tsv")   # append-only "<code-hash>|<examples-hash>\t0|1"; gitignored
+
+
+def code_hash(code: str) -> str:
+    return hashlib.sha1(code.encode()).hexdigest()[:16]
+
+
+def examples_tag(examples: list[tuple[str, str]]) -> str:
+    return hashlib.sha1(repr(examples).encode()).hexdigest()[:12]
+
+
+def result_key(code: str, examples: list[tuple[str, str]]) -> str:
+    """Identity of one check: the program's *content* and the examples it ran on.
+    Keyed by content, not doc id, so an edited snippet in a new code version
+    can never be served a stale pass/fail."""
+    return f"{code_hash(code)}|{examples_tag(examples)}"
 
 
 def load_results() -> dict[str, bool]:
