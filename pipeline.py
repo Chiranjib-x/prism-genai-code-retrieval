@@ -45,6 +45,22 @@ def _prefixes(model_name: str) -> tuple[str, str]:
     return next((p for key, p in PREFIXES.items() if key in model_name.lower()), ("", ""))
 
 
+def load_encoder(model_name: str, max_len: int) -> SentenceTransformer:
+    """CPU encoder, set up identically for benchmark and demo."""
+    # trust_remote_code: CodeXEmbed ships its model class in its HF repo.
+    # Only pass model ids you have vetted.
+    enc = SentenceTransformer(model_name, device="cpu", trust_remote_code=True)
+    # transformers 5 loads the checkpoint's dtype; CodeXEmbed ships bfloat16,
+    # which consumer CPUs emulate slowly (82 vs 619 tokens/s measured). fp32
+    # is also what reproduces the model card's similarities exactly.
+    enc.float()
+    repair_nonpersistent_buffers(enc)
+    # CPU attention is quadratic: an 8k-token context overflows 16 GB RAM and
+    # thrashes swap. 1024 keeps the full text of 98% of queries, 99% of docs.
+    enc.max_seq_length = min(enc.max_seq_length, max_len)
+    return enc
+
+
 def emb_path(model_name: str, max_len: int, texts: list[str]) -> Path:
     """Cache file for these exact texts under this model and truncation."""
     blob = "\0".join([model_name, str(max_len), *texts]).encode()
@@ -88,17 +104,7 @@ class ExecRerankSearch:
                  max_queries: int = 0, max_len: int = 1024):
         self.model_name, self.k, self.rerank, self.workers = model_name, k, rerank, workers
         self.max_queries = max_queries  # 0 = no limit
-        # trust_remote_code: CodeXEmbed ships its model class in its HF repo.
-        # Only pass model ids you have vetted.
-        self.encoder = SentenceTransformer(model_name, device="cpu", trust_remote_code=True)
-        # transformers 5 loads the checkpoint's dtype; CodeXEmbed ships bfloat16,
-        # which consumer CPUs emulate slowly (82 vs 619 tokens/s measured). fp32
-        # is also what reproduces the model card's similarities exactly.
-        self.encoder.float()
-        repair_nonpersistent_buffers(self.encoder)
-        # CPU attention is quadratic: an 8k-token context overflows 16 GB RAM and
-        # thrashes swap. 1024 keeps the full text of 98% of queries, 99% of docs.
-        self.encoder.max_seq_length = min(self.encoder.max_seq_length, max_len)
+        self.encoder = load_encoder(model_name, max_len)
         print(f"{model_name}: max_seq_length={self.encoder.max_seq_length}", flush=True)
         self.q_prefix, self.d_prefix = _prefixes(model_name)
         self.cache: dict[str, bool] = load_results()
