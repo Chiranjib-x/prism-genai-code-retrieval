@@ -26,7 +26,7 @@ from datasets import load_dataset
 from execute import parse_examples, passes
 from pipeline import PASS_BOOST, EmbeddingStore, _prefixes, load_encoder
 
-DEFAULT_MODEL = "Salesforce/SFR-Embedding-Code-400M_R"
+DEFAULT_MODEL = "intfloat/e5-base-v2"  # the submitted, fully indexed configuration
 
 
 def main() -> None:
@@ -36,7 +36,7 @@ def main() -> None:
     ap.add_argument("--file", help="read the problem statement from a file")
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--max-len", type=int, default=1024)
-    ap.add_argument("--k", type=int, default=100, help="candidates checked by execution")
+    ap.add_argument("--k", type=int, default=50, help="candidates checked by execution")
     ap.add_argument("--top", type=int, default=10)
     args = ap.parse_args()
 

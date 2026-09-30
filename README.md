@@ -33,6 +33,16 @@ official results JSON.
 
 Full ablations, recall-by-depth and negative results: [RESULTS.md](RESULTS.md).
 
+Official MTEB result: [results/appsretrieval_e5-base-v2-exec-k50.json](results/appsretrieval_e5-base-v2-exec-k50.json).
+Per-query rankings (top 1,000 for every query) are gzipped to stay under GitHub's
+file limit: `results/predictions/e5-base-v2-exec-k50/AppsRetrieval_predictions.json.gz`.
+
+## Submission materials
+
+- Presentation: [PDF](VITV_Theme1_Presentation.pdf) · [PPTX](VITV_Theme1_Presentation.pptx)
+- Demo video: **[demo video link]**
+- AI disclosure: [AI_DISCLOSURE.md](AI_DISCLOSURE.md)
+
 ## Setup
 
 Python 3.11, CPU only.
@@ -47,11 +57,15 @@ Or with Docker: see the header of [Dockerfile](Dockerfile).
 ## Run
 
 ```bash
-# Full benchmark: writes results/appsretrieval_<config>.json (the MTEB submission file)
-python pipeline.py --model Salesforce/SFR-Embedding-Code-400M_R --k 100
+# Full benchmark (submitted config: e5-base-v2, top-50 execution rerank).
+# Writes results/appsretrieval_<config>.json, the MTEB submission file.
+python pipeline.py
 
 # Stage 1 only (ablation)
-python pipeline.py --model Salesforce/SFR-Embedding-Code-400M_R --no-rerank
+python pipeline.py --no-rerank
+
+# Other encoders, e.g. CodeXEmbed-400M (integrated; full run not yet completed)
+python pipeline.py --model Salesforce/SFR-Embedding-Code-400M_R --k 100
 
 # Interactive demo: ranked solutions + timings for one problem
 python search.py --qid q5001

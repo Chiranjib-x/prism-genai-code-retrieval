@@ -1,8 +1,8 @@
 """Two-stage retrieval for CoIR AppsRetrieval, evaluated through MTEB.
 
-Stage 1  dense retrieval with a *general text* embedder. The query is an
-         English problem statement, not code -- code-specific encoders score
-         an order of magnitude worse on this dataset (UniXcoder 1.36 NDCG@10).
+Stage 1  dense retrieval. The query is an English problem statement, not
+         code: older code encoders not trained for English->code search score
+         poorly here (UniXcoder 1.36 NDCG@10); e5-base-v2 scores 11.52.
 Stage 2  execution verification. Candidates in the top-K that reproduce the
          query's worked examples are moved above those that do not; dense
          order is kept within each group.

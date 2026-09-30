@@ -3,3 +3,5 @@ __pycache__/
 .venv/
 archive/
 cache/
+results/predictions/**/*.json
+PROGRESS_REPORT.md

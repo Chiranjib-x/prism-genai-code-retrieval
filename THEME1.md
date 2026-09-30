@@ -1,5 +1,7 @@
 # Theme 01 — Agentic Code Intelligence: analysis and plan
 
+> **Planning notes from 24 Sep, kept for the record and superseded in places.** The submitted, full-test-split result is **20.71 NDCG@10** (e5-base-v2 + execution rerank, top-50); see [README.md](README.md) and [RESULTS.md](RESULTS.md).
+
 Written 24 Sep 2026. Deadline **30 Sep, 11:59 PM** — 6 days.
 
 ---
