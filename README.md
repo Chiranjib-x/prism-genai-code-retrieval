@@ -40,7 +40,7 @@ file limit: `results/predictions/e5-base-v2-exec-k50/AppsRetrieval_predictions.j
 ## Submission materials
 
 - Presentation: [PDF](VITV_Error404_1_Presentation.pdf) · [PPTX](VITV_Error404_1_Presentation.pptx)
-- Demo video: **[demo video link]**
+- Demo video: https://youtu.be/WuWeffTKWeM
 - AI disclosure: [AI_DISCLOSURE.md](AI_DISCLOSURE.md)
 
 ## Setup
