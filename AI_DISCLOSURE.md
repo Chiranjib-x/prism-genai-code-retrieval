@@ -4,13 +4,12 @@ Samsung PRISM GenAI Hackathon 2026 · Theme 1: Agentic Code Intelligence · Team
 
 ## Summary
 
-We used AI coding assistants as engineering tools, under our direction, from
-13 to 30 September. **Most of the source code and documentation in this
-repository was written by Claude Code** (Anthropic; models Claude Opus 5,
-Opus 5.5 and Sonnet 4.6). We set the direction, made the decisions below, ran
-every experiment on our own hardware, and did not accept a result until it had
-been checked independently. The per-feature table at the end records the origin
-of each part.
+We chose the problem and the approach, directed the build phase by phase from
+13 to 30 September, ran every experiment on our own hardware, and did not accept
+a result until it had been checked independently. The code and documentation
+were produced with Claude Code (Anthropic; models Claude Opus 5, Opus 5.5 and
+Sonnet 4.6) as our AI coding assistant, working under our direction. The
+per-feature table at the end records the origin of each part.
 
 Other AI tool used: **[tool name, and what we used it for]**
 
@@ -25,8 +24,8 @@ pretrained embedding model and a deterministic execution check:
 
 ## Decisions we made, and why
 
-AI tools wrote most of the code. Choosing which problem to solve, what to
-believe, and what to claim was our job:
+Claude Code handled the implementation. Choosing which problem to solve, what
+to believe, and what to claim was our job:
 
 1. **We changed theme mid-hackathon.** We started on Theme 5 (interruptible
    real-time agents), researched it in phases and built an engine with
